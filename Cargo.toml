@@ -1,0 +1,14 @@
+[package]
+name = "music-library"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dirs = "7.0.0"
+eframe = "0.36.2"
+lofty = "0.25.4"
+rfd = "0.17.2"
+rodio = "0.22.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
