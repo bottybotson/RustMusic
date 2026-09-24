@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::importer::Candidate;
@@ -103,6 +103,26 @@ impl Library {
             })
         })?;
         rows.collect()
+    }
+
+    pub fn ui_scale(&self) -> rusqlite::Result<f32> {
+        let value: Option<String> = self.connection.query_row(
+            "SELECT value FROM settings WHERE key = 'ui_scale'",
+            [],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(value.and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(1.2)
+            .clamp(0.9, 2.0))
+    }
+
+    pub fn set_ui_scale(&self, scale: f32) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('ui_scale', ?1)",
+            [scale.to_string()],
+        )?;
+        Ok(())
     }
 
     pub fn add(&self, candidate: &Candidate) -> rusqlite::Result<AddResult> {
@@ -242,6 +262,19 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_scale_persists_between_launches() {
+        let path = std::env::temp_dir().join(format!("music-library-scale-{}.sqlite3", Uuid::new_v4()));
+        let library = Library::open(&path).unwrap();
+        assert_eq!(library.ui_scale().unwrap(), 1.2);
+        library.set_ui_scale(1.5).unwrap();
+        drop(library);
+        let reopened = Library::open(&path).unwrap();
+        assert_eq!(reopened.ui_scale().unwrap(), 1.5);
+        drop(reopened);
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn removing_track_clears_its_playlist_entries_without_deleting_audio() {
