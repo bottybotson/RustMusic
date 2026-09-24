@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
@@ -41,6 +42,10 @@ pub enum AddResult {
     Duplicate,
 }
 
+fn now_millis() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
+}
+
 impl Library {
     pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
@@ -68,7 +73,8 @@ impl Library {
              CREATE TABLE IF NOT EXISTS playlists (
                  id TEXT PRIMARY KEY,
                  name TEXT NOT NULL,
-                 revision INTEGER NOT NULL DEFAULT 1
+                 revision INTEGER NOT NULL DEFAULT 1,
+                 modified_at INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE IF NOT EXISTS playlist_entries (
                  id TEXT PRIMARY KEY,
@@ -79,6 +85,12 @@ impl Library {
                  position INTEGER NOT NULL
              );",
         )?;
+        let columns: Vec<String> = connection.prepare("PRAGMA table_info(playlists)")?
+            .query_map([], |row| row.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|column| column == "modified_at") {
+            connection.execute("ALTER TABLE playlists ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0", [])?;
+        }
         connection.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_id', ?1)",
             [Uuid::new_v4().to_string()],
@@ -168,9 +180,10 @@ impl Library {
             return Ok(false);
         }
         transaction.execute(
-            "UPDATE playlists SET revision = revision + 1
+            "UPDATE playlists SET revision = revision + 1,
+             modified_at = MAX(?2, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0))
              WHERE id IN (SELECT playlist_id FROM playlist_entries WHERE track_id = ?1)",
-            [track_id],
+            params![track_id, now_millis()],
         )?;
         transaction.execute("DELETE FROM playlist_entries WHERE track_id = ?1", [track_id])?;
         transaction.commit()?;
@@ -179,7 +192,7 @@ impl Library {
 
     pub fn playlists(&self) -> rusqlite::Result<Vec<Playlist>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE, id",
+            "SELECT id, name FROM playlists ORDER BY modified_at DESC, name COLLATE NOCASE, id",
         )?;
         let rows = statement.query_map([], |row| Ok(Playlist { id: row.get(0)?, name: row.get(1)? }))?;
         rows.collect()
@@ -205,14 +218,20 @@ impl Library {
 
     pub fn create_playlist(&self, name: &str) -> rusqlite::Result<String> {
         let id = Uuid::new_v4().to_string();
-        self.connection.execute("INSERT INTO playlists (id, name) VALUES (?1, ?2)", params![&id, name])?;
+        self.connection.execute(
+            "INSERT INTO playlists (id, name, modified_at)
+             VALUES (?1, ?2, MAX(?3, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0)))",
+            params![&id, name, now_millis()],
+        )?;
         Ok(id)
     }
 
     pub fn rename_playlist(&self, id: &str, name: &str) -> rusqlite::Result<()> {
         self.connection.execute(
-            "UPDATE playlists SET name = ?1, revision = revision + 1 WHERE id = ?2",
-            params![name, id],
+            "UPDATE playlists SET name = ?1, revision = revision + 1,
+             modified_at = MAX(?3, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0))
+             WHERE id = ?2",
+            params![name, id, now_millis()],
         )?;
         Ok(())
     }
@@ -235,14 +254,24 @@ impl Library {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![Uuid::new_v4().to_string(), playlist_id, track.id, track.title, track.artist, position],
         )?;
-        tx.execute("UPDATE playlists SET revision = revision + 1 WHERE id = ?1", [playlist_id])?;
+        tx.execute(
+            "UPDATE playlists SET revision = revision + 1,
+             modified_at = MAX(?2, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0))
+             WHERE id = ?1",
+            params![playlist_id, now_millis()],
+        )?;
         tx.commit()
     }
 
     pub fn remove_entry(&self, playlist_id: &str, entry_id: &str) -> rusqlite::Result<()> {
         let tx = self.connection.unchecked_transaction()?;
         tx.execute("DELETE FROM playlist_entries WHERE id = ?1 AND playlist_id = ?2", params![entry_id, playlist_id])?;
-        tx.execute("UPDATE playlists SET revision = revision + 1 WHERE id = ?1", [playlist_id])?;
+        tx.execute(
+            "UPDATE playlists SET revision = revision + 1,
+             modified_at = MAX(?2, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0))
+             WHERE id = ?1",
+            params![playlist_id, now_millis()],
+        )?;
         tx.commit()
     }
 
@@ -254,7 +283,12 @@ impl Library {
                 params![position as i64, id, playlist_id],
             )?;
         }
-        tx.execute("UPDATE playlists SET revision = revision + 1 WHERE id = ?1", [playlist_id])?;
+        tx.execute(
+            "UPDATE playlists SET revision = revision + 1,
+             modified_at = MAX(?2, COALESCE((SELECT MAX(modified_at) + 1 FROM playlists), 0))
+             WHERE id = ?1",
+            params![playlist_id, now_millis()],
+        )?;
         tx.commit()
     }
 }
@@ -262,6 +296,36 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_playlists_and_orders_recent_changes_first() {
+        let path = std::env::temp_dir().join(format!("music-library-playlists-{}.sqlite3", Uuid::new_v4()));
+        let legacy = Connection::open(&path).unwrap();
+        legacy.execute_batch(
+            "CREATE TABLE playlists (id TEXT PRIMARY KEY, name TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+             INSERT INTO playlists (id, name) VALUES ('old-id', 'Old');",
+        ).unwrap();
+        drop(legacy);
+
+        let library = Library::open(&path).unwrap();
+        let recent_id = library.create_playlist("Recent").unwrap();
+        assert_eq!(library.playlists().unwrap()[0].id, recent_id);
+        library.rename_playlist("old-id", "Updated").unwrap();
+        assert_eq!(library.playlists().unwrap()[0].id, "old-id");
+
+        let candidate = Candidate {
+            source: PathBuf::from("missing-file.mp3"), content_hash: "order-hash".to_string(),
+            title: "Song".to_string(), artist: "Artist".to_string(),
+            album: "Album".to_string(), duration_ms: 1000, format: "MP3",
+            missing_title: false, missing_artist: false,
+        };
+        library.add(&candidate).unwrap();
+        let track = library.tracks().unwrap().remove(0);
+        library.add_to_playlist(&recent_id, &track).unwrap();
+        assert_eq!(library.playlists().unwrap()[0].id, recent_id);
+        drop(library);
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn ui_scale_persists_between_launches() {

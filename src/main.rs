@@ -22,6 +22,7 @@ enum View {
     Artists,
     Playlists,
     Settings,
+    Curation,
 }
 
 #[derive(Default)]
@@ -43,7 +44,9 @@ struct MusicApp {
     selected_artist: Option<String>,
     selected_album: Option<String>,
     selected_playlist: Option<String>,
-    add_target: Option<String>,
+    playlist_search: String,
+    curation_search: String,
+    pending_playlist_add: Option<(String, String)>,
     new_playlist_name: String,
     rename_value: String,
     confirm_delete: bool,
@@ -80,11 +83,16 @@ fn artist_suggestions<'a>(artists: &'a [String], input: &str) -> Vec<&'a str> {
         .collect()
 }
 
+fn matches_track(track: &Track, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty() || format!("{} {} {}", track.title, track.artist, track.album)
+        .to_lowercase().contains(&query)
+}
+
 impl MusicApp {
     fn new(library: Library, ctx: &egui::Context) -> Self {
         let tracks = library.tracks().unwrap_or_default();
         let playlists = library.playlists().unwrap_or_default();
-        let add_target = playlists.first().map(|item| item.id.clone());
         let ui_scale = library.ui_scale().unwrap_or(1.2);
         ctx.set_zoom_factor(ui_scale);
         ctx.all_styles_mut(|style| {
@@ -105,7 +113,9 @@ impl MusicApp {
             selected_artist: None,
             selected_album: None,
             selected_playlist: None,
-            add_target,
+            playlist_search: String::new(),
+            curation_search: String::new(),
+            pending_playlist_add: None,
             new_playlist_name: String::new(),
             rename_value: String::new(),
             confirm_delete: false,
@@ -188,12 +198,7 @@ impl MusicApp {
 
     fn refresh_playlists(&mut self) {
         match self.library.playlists() {
-            Ok(playlists) => {
-                self.playlists = playlists;
-                if self.add_target.as_ref().is_none_or(|id| !self.playlists.iter().any(|item| &item.id == id)) {
-                    self.add_target = self.playlists.first().map(|item| item.id.clone());
-                }
-            }
+            Ok(playlists) => self.playlists = playlists,
             Err(error) => self.status = format!("Cannot read playlists: {error}"),
         }
     }
@@ -201,6 +206,7 @@ impl MusicApp {
     fn choose_playlist(&mut self, id: String) {
         self.selected_playlist = Some(id.clone());
         self.rename_value = self.playlists.iter().find(|item| item.id == id).map(|item| item.name.clone()).unwrap_or_default();
+        self.playlist_search.clear();
         self.confirm_delete = false;
         self.reload_entries();
     }
@@ -233,18 +239,18 @@ impl MusicApp {
         }
     }
 
-    fn add_selected_to_playlist(&mut self) {
-        let Some(id) = self.add_target.clone() else { return };
-        let Some(track) = self.tracks.iter().find(|track| Some(&track.id) == self.selected_track.as_ref()).cloned() else {
-            self.status = "Select a track first".to_string();
+    fn add_track_to_playlist(&mut self, playlist_id: &str, track_id: &str) {
+        let Some(track) = self.track(track_id).cloned() else {
+            self.status = "Track no longer exists in the library".to_string();
             return;
         };
-        match self.library.add_to_playlist(&id, &track) {
+        match self.library.add_to_playlist(playlist_id, &track) {
             Ok(()) => {
                 self.status = format!("Added {} to playlist", track.title);
-                if self.selected_playlist.as_ref() == Some(&id) {
+                if self.selected_playlist.as_deref() == Some(playlist_id) {
                     self.reload_entries();
                 }
+                self.refresh_playlists();
             }
             Err(error) => self.status = format!("Cannot add track: {error}"),
         }
@@ -274,6 +280,7 @@ impl MusicApp {
                     Ok(tracks) => self.tracks = tracks,
                     Err(error) => self.status = format!("Track removed, but cannot refresh library: {error}"),
                 }
+                self.refresh_playlists();
                 self.reload_entries();
                 if self.selected_artist.as_ref().is_some_and(|artist| !self.tracks.iter().any(|track| &track.artist == artist)) {
                     self.selected_artist = None;
@@ -362,6 +369,7 @@ impl MusicApp {
             View::Artists => self.album_ids(),
             View::Playlists => self.entries.iter().map(|item| item.track_id.clone()).collect(),
             View::Settings => Vec::new(),
+            View::Curation => Vec::new(),
         };
         if let Some(start) = ids.iter().position(|id| id == &selected) {
             self.start_queue(ids, start);
@@ -371,10 +379,8 @@ impl MusicApp {
     }
 
     fn filtered_library_ids(&self) -> Vec<String> {
-        let search = self.search.to_lowercase();
-        self.tracks.iter().filter(|track| {
-            search.is_empty() || format!("{} {} {}", track.title, track.artist, track.album).to_lowercase().contains(&search)
-        }).map(|track| track.id.clone()).collect()
+        self.tracks.iter().filter(|track| matches_track(track, &self.search))
+            .map(|track| track.id.clone()).collect()
     }
 
     fn artist_names(&self) -> Vec<String> {
@@ -398,19 +404,15 @@ impl MusicApp {
         tracks.into_iter().map(|track| track.id.clone()).collect()
     }
 
-    fn draw_add_to_playlist(&mut self, ui: &mut egui::Ui) {
+    fn draw_track_menu(&mut self, ui: &mut egui::Ui, track_id: &str) {
         if self.playlists.is_empty() { return; }
-        let current_name = self.add_target.as_ref().and_then(|id| self.playlists.iter().find(|item| &item.id == id))
-            .map(|item| item.name.clone()).unwrap_or_else(|| "Choose playlist".to_string());
-        ui.horizontal(|ui| {
-            ui.label("Selected track →");
-            egui::ComboBox::from_id_salt("add_to_playlist").selected_text(current_name).show_ui(ui, |ui| {
-                for item in &self.playlists {
-                    ui.selectable_value(&mut self.add_target, Some(item.id.clone()), &item.name);
+        let playlists = self.playlists.clone();
+        ui.menu_button("Add to playlist", |ui| {
+            for playlist in playlists {
+                if ui.button(&playlist.name).clicked() {
+                    self.pending_playlist_add = Some((track_id.to_string(), playlist.id));
+                    ui.close();
                 }
-            });
-            if ui.button("Add to playlist").clicked() {
-                self.add_selected_to_playlist();
             }
         });
     }
@@ -421,8 +423,7 @@ impl MusicApp {
             ui.label("Search");
             ui.text_edit_singleline(&mut self.search);
         });
-        ui.small("Right-click a track title to remove it from the library.");
-        self.draw_add_to_playlist(ui);
+        ui.small("Right-click a track title to add it to a playlist.");
         let ids = self.filtered_library_ids();
         let mut play = None;
         egui::ScrollArea::both().show(ui, |ui| {
@@ -439,10 +440,7 @@ impl MusicApp {
                         self.selected_track = Some(id.clone());
                     }
                     response.context_menu(|ui| {
-                        if ui.button("Remove from library…").clicked() {
-                            self.confirm_remove_track = Some(id.clone());
-                            ui.close();
-                        }
+                        self.draw_track_menu(ui, id);
                     });
                     ui.label(display_name(&track.artist, "Unknown artist"));
                     ui.label(display_name(&track.album, "Unknown album"));
@@ -458,7 +456,6 @@ impl MusicApp {
 
     fn draw_artists(&mut self, ui: &mut egui::Ui) {
         ui.heading("Artists");
-        self.draw_add_to_playlist(ui);
         let artists = self.artist_names();
         let albums = self.album_names();
         let ids = self.album_ids();
@@ -496,10 +493,7 @@ impl MusicApp {
                             self.selected_track = Some(id.clone());
                         }
                         response.context_menu(|ui| {
-                            if ui.button("Remove from library…").clicked() {
-                                self.confirm_remove_track = Some(id.clone());
-                                ui.close();
-                            }
+                            self.draw_track_menu(ui, id);
                         });
                         ui.label(duration_text(track.duration_ms));
                         if !track.source.is_file() { ui.small("Missing"); }
@@ -566,6 +560,26 @@ impl MusicApp {
             sort_title = ui.button("Sort by title").clicked();
             sort_artist = ui.button("Sort by artist").clicked();
         });
+        ui.add(egui::TextEdit::singleline(&mut self.playlist_search).hint_text("Search songs to add: title, artist or album"));
+        if !self.playlist_search.trim().is_empty() {
+            let results: Vec<Track> = self.tracks.iter()
+                .filter(|track| matches_track(track, &self.playlist_search))
+                .take(51).cloned().collect();
+            if results.is_empty() { ui.label("No matching songs"); }
+            egui::ScrollArea::vertical().id_salt("playlist_search_results").max_height(190.0).show(ui, |ui| {
+                for track in results.iter().take(50) {
+                    ui.horizontal(|ui| {
+                        if ui.button("Add").clicked() {
+                            self.pending_playlist_add = Some((track.id.clone(), playlist_id.clone()));
+                        }
+                        ui.label(format!("{} — {} · {}", track.title,
+                            display_name(&track.artist, "Unknown artist"),
+                            display_name(&track.album, "Unknown album")));
+                    });
+                }
+            });
+            if results.len() > 50 { ui.small("Showing the first 50 results. Refine your search."); }
+        }
         ui.label(format!("{} entries · use ↑ and ↓ to reorder", self.entries.len()));
         let entries = self.entries.clone();
         egui::ScrollArea::vertical().id_salt("playlist_entries").show(ui, |ui| {
@@ -591,10 +605,7 @@ impl MusicApp {
                             remove = Some(entry.id.clone());
                             ui.close();
                         }
-                        if track_available && ui.button("Remove from library…").clicked() {
-                            self.confirm_remove_track = Some(entry.track_id.clone());
-                            ui.close();
-                        }
+                        if track_available { self.draw_track_menu(ui, &entry.track_id); }
                     });
                     if !availability.is_empty() { ui.small(availability); }
                 });
@@ -623,7 +634,7 @@ impl MusicApp {
             }
         } else if let Some(id) = remove {
             match self.library.remove_entry(&playlist_id, &id) {
-                Ok(()) => self.reload_entries(),
+                Ok(()) => { self.reload_entries(); self.refresh_playlists(); }
                 Err(error) => self.status = format!("Cannot remove entry: {error}"),
             }
         } else if let Some((from, to)) = move_entry {
@@ -646,7 +657,7 @@ impl MusicApp {
 
     fn save_order(&mut self, playlist_id: &str, ids: Vec<String>) {
         match self.library.reorder(playlist_id, &ids) {
-            Ok(()) => self.reload_entries(),
+            Ok(()) => { self.reload_entries(); self.refresh_playlists(); }
             Err(error) => self.status = format!("Cannot reorder playlist: {error}"),
         }
     }
@@ -719,6 +730,27 @@ impl MusicApp {
                 self.status = format!("Cannot save interface size: {error}");
             }
         }
+    }
+
+    fn draw_curation(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Curation");
+        ui.label("Remove entries from the library. Audio files stay on disk.");
+        ui.add(egui::TextEdit::singleline(&mut self.curation_search).hint_text("Find a track by title, artist or album"));
+        let tracks: Vec<Track> = self.tracks.iter()
+            .filter(|track| matches_track(track, &self.curation_search)).cloned().collect();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for track in tracks {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{} — {} · {}", track.title,
+                        display_name(&track.artist, "Unknown artist"),
+                        display_name(&track.album, "Unknown album")))
+                        .on_hover_text(track.source.display().to_string());
+                    if ui.button("Remove…").clicked() {
+                        self.confirm_remove_track = Some(track.id.clone());
+                    }
+                });
+            }
+        });
     }
 
     fn review_window(&mut self, ui: &egui::Ui) {
@@ -822,15 +854,19 @@ impl eframe::App for MusicApp {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("Music Library");
                 ui.separator();
-                for (view, label) in [(View::Library, "Library"), (View::Artists, "Artists"), (View::Playlists, "Playlists"), (View::Settings, "Settings")] {
+                for (view, label) in [(View::Library, "Library"), (View::Artists, "Artists"), (View::Playlists, "Playlists")] {
                     if ui.selectable_label(self.view == view, label).clicked() { self.view = view; }
                 }
                 ui.separator();
                 if ui.add_enabled(self.incoming.is_none() && self.review.is_empty(), egui::Button::new("Import files")).clicked() {
                     self.begin_import();
                 }
-                if ui.add_enabled(self.selected_track.is_some() && self.view != View::Settings, egui::Button::new("Play selected")).clicked() {
+                if ui.add_enabled(self.selected_track.is_some() && !matches!(self.view, View::Settings | View::Curation), egui::Button::new("Play selected")).clicked() {
                     self.play_selected();
+                }
+                ui.add_space(12.0);
+                for (view, label) in [(View::Settings, "Settings"), (View::Curation, "Curation")] {
+                    if ui.selectable_label(self.view == view, label).clicked() { self.view = view; }
                 }
             });
             ui.separator();
@@ -839,6 +875,7 @@ impl eframe::App for MusicApp {
                 View::Artists => self.draw_artists(ui),
                 View::Playlists => self.draw_playlists(ui),
                 View::Settings => self.draw_settings(ui),
+                View::Curation => self.draw_curation(ui),
             }
             if !self.status.is_empty() {
                 ui.separator();
@@ -847,6 +884,9 @@ impl eframe::App for MusicApp {
         });
         self.review_window(ui);
         self.remove_track_window(ui);
+        if let Some((track_id, playlist_id)) = self.pending_playlist_add.take() {
+            self.add_track_to_playlist(&playlist_id, &track_id);
+        }
     }
 }
 
@@ -874,7 +914,8 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::artist_suggestions;
+    use super::{artist_suggestions, matches_track, Track};
+    use std::path::PathBuf;
 
     #[test]
     fn suggests_existing_artists_by_prefix() {
@@ -882,5 +923,18 @@ mod tests {
         assert_eq!(artist_suggestions(&artists, " ad"), vec!["Adele"]);
         assert!(artist_suggestions(&artists, "adele").is_empty());
         assert!(artist_suggestions(&artists, "").is_empty());
+    }
+
+    #[test]
+    fn finds_songs_by_title_artist_or_album() {
+        let track = Track {
+            id: "one".to_string(), source: PathBuf::new(),
+            title: "First Song".to_string(), artist: "Example Artist".to_string(),
+            album: "Blue Album".to_string(), duration_ms: 1000, format: "MP3".to_string(),
+        };
+        for query in ["first", "ARTIST", "blue"] {
+            assert!(matches_track(&track, query));
+        }
+        assert!(!matches_track(&track, "second"));
     }
 }
