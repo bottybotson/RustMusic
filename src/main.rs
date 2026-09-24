@@ -361,6 +361,7 @@ impl MusicApp {
             View::Library => self.filtered_library_ids(),
             View::Artists => self.album_ids(),
             View::Playlists => self.entries.iter().map(|item| item.track_id.clone()).collect(),
+            View::Settings => Vec::new(),
         };
         if let Some(start) = ids.iter().position(|id| id == &selected) {
             self.start_queue(ids, start);
@@ -828,7 +829,7 @@ impl eframe::App for MusicApp {
                 if ui.add_enabled(self.incoming.is_none() && self.review.is_empty(), egui::Button::new("Import files")).clicked() {
                     self.begin_import();
                 }
-                if ui.add_enabled(self.selected_track.is_some(), egui::Button::new("Play selected")).clicked() {
+                if ui.add_enabled(self.selected_track.is_some() && self.view != View::Settings, egui::Button::new("Play selected")).clicked() {
                     self.play_selected();
                 }
             });
