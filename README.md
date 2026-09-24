@@ -68,12 +68,13 @@ python3 /path/to/RustMusic/tools/manifest_from_ytdlp.py .
 
 The script pairs each `<video-id>.info.json` with `<video-id>.mp3`, writes `music-library-import.json`, and skips sidecars without an MP3. Edit the manifest to correct titles, artists or albums before importing. Keep sidecars and browser credentials private; the app itself neither contacts YouTube nor reads the sidecars. On Windows Command Prompt, use `"%(id)s.%(ext)s"` for the output template and `python` for the script.
 
-- In **Library**, search or select a track. Use **Play selected** or its play icon button to play through the visible list in order. Right-click a track title for **Add to playlist**, then choose a playlist from the submenu. The most recently changed playlists appear first.
+- In **Library**, search or select a track. Use the play button beside **All tracks** to play the visible list, or double-click a song to start from it. Right-click a track title for **Play next**, **Add to queue**, or **Add to playlist**. The most recently changed playlists appear first in the playlist submenu.
 - To remove a track from the library, open **Curation**, find the track, choose **Remove…**, and confirm. Its entries in playlists and the playback queue are removed too. The audio file is left on disk; importing the file again adds it back.
-- In **Artists**, choose an artist and album to see their tracks. Use **Play album** or a track's play icon button to play that album in title order.
-- In **Playlists**, create or select a playlist, search for songs by title, artist or album, and click **Add** beside a result. You can also right-click tracks in Library, Artists or a playlist to add them to another playlist. A playlist can be renamed, deleted, sorted by title or artist, and manually reordered with the up and down arrow buttons. Right-click an entry to remove it from that playlist. A track can appear more than once. Use **Play playlist** to play its entries in order.
-- The bottom bar shows the current track and provides previous, pause/resume, next, stop, position seeking, and volume. Missing files and unresolved playlist entries stay visible; playback skips them.
-- In **Settings**, adjust the interface size (0.9x to 2x) or reset it to the larger default. The choice persists across launches.
+- In **Artists**, choose an artist and album to see their tracks. Use the play button above the album's tracks to play them in title order, or double-click a song to start from it.
+- In **Playlists**, create or select a playlist, search for songs by title, artist or album, and click **Add** beside a result. A play button beside each playlist starts it directly. You can also right-click tracks in Library, Artists or a playlist to add them to another playlist. A playlist can be renamed, deleted, sorted by title or artist, and manually reordered with the arrow buttons. Right-click an entry to remove it from that playlist. A track can appear more than once. Double-click a song to start from that point in the playlist.
+- In **Queue**, search for songs to play next or append, see what is playing, reorder upcoming songs with the arrows, or remove them. Queue edits affect the current listening session and leave the saved playlist alone.
+- The bottom bar prominently shows the source of playback (Library, playlist or album) above the current track. A single track played on its own has no source heading; adding songs to it makes a **Custom queue**. Adding a song to a playlist queue keeps the playlist name. Matching icon buttons control previous, pause/resume, next, stop, shuffle and playlist repeat. Shuffle randomizes the upcoming songs without moving the current song or history. Playlist repeat restarts the source playlist after the remaining queue plays; one-off songs added to the queue play once. Dragging the position slider previews the time and seeks when released. Missing files and unresolved playlist entries stay visible; playback skips them.
+- In **Settings**, adjust the interface size (0.9x to 2x) and the player footer height, or reset either to its default. Both choices persist across launches.
 
 ## If something fails
 
@@ -84,4 +85,4 @@ The script pairs each `<video-id>.info.json` with `<video-id>.mp3`, writes `musi
 
 The database is normally at `~/.local/share/MusicLibrary/library.sqlite3` on Mint, or under `$XDG_DATA_HOME/MusicLibrary` if you have set that variable. Audio files stay in their original locations. If one moves, it is shown as missing until you import an identical copy.
 
-Snapshot export/import, Android, shuffle/repeat and EQ are not implemented. Playback currently uses Rodio; the stored track IDs, file hashes, revisions and library ID allow later transfer features.
+Snapshot export/import, Android and EQ are not implemented. Playback currently uses Rodio; the stored track IDs, file hashes, revisions and library ID allow later transfer features.

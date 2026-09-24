@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use eframe::egui;
+use rand::seq::SliceRandom;
 use importer::Candidate;
 use library::{AddResult, Library, Playlist, PlaylistEntry, Track};
 
@@ -21,14 +22,54 @@ enum View {
     Library,
     Artists,
     Playlists,
+    Queue,
     Settings,
     Curation,
+}
+
+#[derive(Default)]
+enum QueueSource {
+    Library,
+    Playlist { id: String, name: String },
+    Album(String),
+    #[default]
+    Single,
 }
 
 #[derive(Default)]
 struct Queue {
     ids: Vec<String>,
     index: Option<usize>,
+    source: QueueSource,
+    source_ids: Vec<String>,
+    shuffle: bool,
+    repeat_playlist: bool,
+}
+
+impl Queue {
+    fn upcoming_start(&self) -> usize {
+        self.index.map_or(0, |index| index + 1)
+    }
+
+    fn shuffle_upcoming(&mut self) {
+        let start = self.upcoming_start();
+        self.ids[start..].shuffle(&mut rand::rng());
+    }
+
+    fn insert(&mut self, id: String, next: bool) {
+        let index = if next { self.upcoming_start() } else { self.ids.len() };
+        self.ids.insert(index, id);
+    }
+
+    fn restart_playlist(&mut self) -> bool {
+        if !self.repeat_playlist || !matches!(&self.source, QueueSource::Playlist { .. }) || self.source_ids.is_empty() {
+            return false;
+        }
+        self.ids = self.source_ids.clone();
+        self.index = None;
+        if self.shuffle { self.shuffle_upcoming(); }
+        true
+    }
 }
 
 struct MusicApp {
@@ -47,6 +88,8 @@ struct MusicApp {
     playlist_search: String,
     curation_search: String,
     pending_playlist_add: Option<(String, String)>,
+    pending_queue_add: Option<(String, bool)>,
+    queue_search: String,
     new_playlist_name: String,
     rename_value: String,
     confirm_delete: bool,
@@ -54,6 +97,8 @@ struct MusicApp {
     audio: Option<audio::Audio>,
     volume: f32,
     ui_scale: f32,
+    footer_height: f32,
+    seek_preview: Option<f32>,
     search: String,
     status: String,
 }
@@ -70,14 +115,27 @@ fn duration_text(milliseconds: i64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-fn play_button() -> egui::Button<'static> {
+#[derive(Clone, Copy)]
+enum PlayerIcon { Play, Pause, Previous, Next, Stop, Shuffle, Repeat }
+
+fn icon_button(icon: PlayerIcon, selected: bool) -> egui::Button<'static> {
+    let (source, label) = match icon {
+        PlayerIcon::Play => (egui::include_image!("../assets/play.svg"), "Play"),
+        PlayerIcon::Pause => (egui::include_image!("../assets/pause.svg"), "Pause"),
+        PlayerIcon::Previous => (egui::include_image!("../assets/previous.svg"), "Previous"),
+        PlayerIcon::Next => (egui::include_image!("../assets/next.svg"), "Next"),
+        PlayerIcon::Stop => (egui::include_image!("../assets/stop.svg"), "Stop"),
+        PlayerIcon::Shuffle => (egui::include_image!("../assets/shuffle.svg"), "Shuffle"),
+        PlayerIcon::Repeat => (egui::include_image!("../assets/repeat.svg"), "Repeat playlist"),
+    };
     egui::Button::new(
-        egui::Image::new(egui::include_image!("../assets/play.svg"))
-            .fit_to_exact_size(egui::vec2(18.0, 18.0))
-            .alt_text("Play"),
+        egui::Image::new(source)
+            .fit_to_exact_size(egui::vec2(20.0, 20.0))
+            .alt_text(label),
     )
     .image_tint_follows_text_color(true)
-    .min_size(egui::vec2(34.0, 32.0))
+    .selected(selected)
+    .min_size(egui::vec2(38.0, 38.0))
 }
 
 fn reorder_button(up: bool) -> egui::Button<'static> {
@@ -92,7 +150,7 @@ fn reorder_button(up: bool) -> egui::Button<'static> {
             .alt_text(if up { "Move up" } else { "Move down" }),
     )
     .image_tint_follows_text_color(true)
-    .min_size(egui::vec2(34.0, 32.0))
+    .min_size(egui::vec2(38.0, 38.0))
 }
 
 fn artist_suggestions<'a>(artists: &'a [String], input: &str) -> Vec<&'a str> {
@@ -119,6 +177,7 @@ impl MusicApp {
         let tracks = library.tracks().unwrap_or_default();
         let playlists = library.playlists().unwrap_or_default();
         let ui_scale = library.ui_scale().unwrap_or(1.2);
+        let footer_height = library.footer_height().unwrap_or(190.0);
         ctx.set_zoom_factor(ui_scale);
         ctx.all_styles_mut(|style| {
             style.spacing.interact_size.y = 26.0;
@@ -141,6 +200,8 @@ impl MusicApp {
             playlist_search: String::new(),
             curation_search: String::new(),
             pending_playlist_add: None,
+            pending_queue_add: None,
+            queue_search: String::new(),
             new_playlist_name: String::new(),
             rename_value: String::new(),
             confirm_delete: false,
@@ -148,6 +209,8 @@ impl MusicApp {
             audio: None,
             volume: 0.8,
             ui_scale,
+            footer_height,
+            seek_preview: None,
             search: String::new(),
             status: String::new(),
         }
@@ -314,15 +377,17 @@ impl MusicApp {
         let title = self.track(id).map(|track| track.title.clone()).unwrap_or_default();
         match self.library.remove_track(id) {
             Ok(true) => {
-                let was_playing = self.queue.index.and_then(|index| self.queue.ids.get(index))
+                let old_index = self.queue.index;
+                let was_playing = old_index.and_then(|index| self.queue.ids.get(index))
                     .is_some_and(|playing_id| playing_id == id);
-                let playing_id = self.queue.index.and_then(|index| self.queue.ids.get(index)).cloned();
+                let removed_before = old_index.map_or(0, |index| self.queue.ids[..index].iter()
+                    .filter(|queued_id| queued_id.as_str() == id).count());
                 self.queue.ids.retain(|queued_id| queued_id != id);
-                self.queue.index = playing_id.and_then(|playing_id| {
-                    self.queue.ids.iter().position(|queued_id| queued_id == &playing_id)
-                });
+                self.queue.source_ids.retain(|queued_id| queued_id != id);
+                self.queue.index = if was_playing { None } else { old_index.map(|index| index - removed_before) };
                 if was_playing {
                     if let Some(engine) = &self.audio { engine.stop(); }
+                    self.seek_preview = None;
                 }
                 self.selected_track = None;
                 self.status = format!("Removed {title} from the library and playlists. Audio file kept.");
@@ -344,17 +409,24 @@ impl MusicApp {
         }
     }
 
-    fn start_queue(&mut self, ids: Vec<String>, start: usize) {
+    fn start_queue(&mut self, ids: Vec<String>, start: usize, source: QueueSource) {
         if ids.is_empty() {
             self.status = "No tracks to play".to_string();
             return;
         }
+        self.queue.source_ids = ids.clone();
         self.queue.ids = ids;
         self.queue.index = None;
+        if !matches!(&source, QueueSource::Playlist { .. }) { self.queue.repeat_playlist = false; }
+        self.queue.source = source;
+        if self.queue.shuffle && start + 1 < self.queue.ids.len() {
+            self.queue.ids[start + 1..].shuffle(&mut rand::rng());
+        }
         self.play_from(start, true);
     }
 
     fn play_from(&mut self, start: usize, forward: bool) {
+        self.seek_preview = None;
         if self.audio.is_none() {
             match audio::Audio::new() {
                 Ok(engine) => self.audio = Some(engine),
@@ -393,6 +465,38 @@ impl MusicApp {
     fn next(&mut self) {
         if let Some(index) = self.queue.index {
             self.play_from(index + 1, true);
+            if self.queue.index.is_none() && self.queue.restart_playlist() {
+                self.play_from(0, true);
+            }
+            if self.queue.index.is_none() {
+                self.queue.ids.clear();
+                self.queue.source_ids.clear();
+            }
+        }
+    }
+
+    fn play_playlist(&mut self, id: &str) {
+        let source = self.playlist_source(id);
+        match self.library.entries(id) {
+            Ok(entries) => self.start_queue(entries.into_iter().map(|entry| entry.track_id).collect(),
+                0, source),
+            Err(error) => self.status = format!("Cannot play playlist: {error}"),
+        }
+    }
+
+    fn playlist_source(&self, id: &str) -> QueueSource {
+        let name = self.playlists.iter().find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.name.clone()).unwrap_or_else(|| "Playlist".to_string());
+        QueueSource::Playlist { id: id.to_string(), name }
+    }
+
+    fn add_to_queue(&mut self, id: String, next: bool) {
+        if self.track(&id).is_none() { return; }
+        if self.queue.index.is_none() {
+            self.start_queue(vec![id], 0, QueueSource::Single);
+        } else {
+            self.queue.insert(id, next);
+            self.status = if next { "Playing next" } else { "Added to queue" }.to_string();
         }
     }
 
@@ -414,17 +518,17 @@ impl MusicApp {
             self.status = "Select a track to play".to_string();
             return;
         };
-        let ids: Vec<String> = match self.view {
-            View::Library => self.filtered_library_ids(),
-            View::Artists => self.album_ids(),
-            View::Playlists => self.entries.iter().map(|item| item.track_id.clone()).collect(),
-            View::Settings => Vec::new(),
-            View::Curation => Vec::new(),
+        let (ids, source): (Vec<String>, QueueSource) = match self.view {
+            View::Library => (self.filtered_library_ids(), QueueSource::Library),
+            View::Artists => (self.album_ids(), self.selected_album.clone().map(QueueSource::Album).unwrap_or_default()),
+            View::Playlists => (self.entries.iter().map(|item| item.track_id.clone()).collect(),
+                self.selected_playlist.as_ref().map(|id| self.playlist_source(id)).unwrap_or_default()),
+            View::Queue | View::Settings | View::Curation => (Vec::new(), QueueSource::Single),
         };
         if let Some(start) = ids.iter().position(|id| id == &selected) {
-            self.start_queue(ids, start);
+            self.start_queue(ids, start, source);
         } else {
-            self.start_queue(vec![selected], 0);
+            self.start_queue(vec![selected], 0, QueueSource::Single);
         }
     }
 
@@ -455,7 +559,16 @@ impl MusicApp {
     }
 
     fn draw_track_menu(&mut self, ui: &mut egui::Ui, track_id: &str) {
+        if ui.button("Play next").clicked() {
+            self.pending_queue_add = Some((track_id.to_string(), true));
+            ui.close();
+        }
+        if ui.button("Add to queue").clicked() {
+            self.pending_queue_add = Some((track_id.to_string(), false));
+            ui.close();
+        }
         if self.playlists.is_empty() { return; }
+        ui.separator();
         let playlists = self.playlists.clone();
         ui.menu_button("Add to playlist", |ui| {
             for playlist in playlists {
@@ -468,27 +581,29 @@ impl MusicApp {
     }
 
     fn draw_library(&mut self, ui: &mut egui::Ui) {
+        let ids = self.filtered_library_ids();
+        let mut play = None;
         ui.horizontal(|ui| {
             ui.heading("All tracks");
+            if ui.add_enabled(!ids.is_empty(), icon_button(PlayerIcon::Play, false))
+                .on_hover_text("Play visible library").clicked() { play = Some(0); }
             ui.label("Search");
             ui.text_edit_singleline(&mut self.search);
         });
-        ui.small("Right-click a track title to add it to a playlist.");
-        let ids = self.filtered_library_ids();
-        let mut play = None;
+        ui.small("Double-click a song to play from here. Right-click for queue and playlist actions.");
         egui::ScrollArea::both().show(ui, |ui| {
-            egui::Grid::new("library_tracks").striped(true).num_columns(7).show(ui, |ui| {
-                for heading in ["", "Title", "Artist", "Album", "Length", "Format", "File"] {
+            egui::Grid::new("library_tracks").striped(true).num_columns(6).show(ui, |ui| {
+                for heading in ["Title", "Artist", "Album", "Length", "Format", "File"] {
                     ui.strong(heading);
                 }
                 ui.end_row();
                 for (index, id) in ids.iter().enumerate() {
                     let Some(track) = self.track(id).cloned() else { continue };
-                    if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
                     let response = ui.selectable_label(self.selected_track.as_ref() == Some(id), &track.title);
                     if response.clicked() {
                         self.selected_track = Some(id.clone());
                     }
+                    if response.double_clicked() { play = Some(index); }
                     response.context_menu(|ui| {
                         self.draw_track_menu(ui, id);
                     });
@@ -501,7 +616,7 @@ impl MusicApp {
                 }
             });
         });
-        if let Some(index) = play { self.start_queue(ids, index); }
+        if let Some(index) = play { self.start_queue(ids, index, QueueSource::Library); }
     }
 
     fn draw_artists(&mut self, ui: &mut egui::Ui) {
@@ -532,16 +647,17 @@ impl MusicApp {
                 }
             });
             columns[2].strong("Tracks");
-            if !ids.is_empty() && columns[2].button("Play album").clicked() { play = Some(0); }
+            if columns[2].add_enabled(!ids.is_empty(), icon_button(PlayerIcon::Play, false))
+                .on_hover_text("Play album").clicked() { play = Some(0); }
             egui::ScrollArea::vertical().id_salt("album_tracks").show(&mut columns[2], |ui| {
                 for (index, id) in ids.iter().enumerate() {
                     let Some(track) = self.track(id).cloned() else { continue };
                     ui.horizontal(|ui| {
-                        if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
                         let response = ui.selectable_label(self.selected_track.as_ref() == Some(id), &track.title);
                         if response.clicked() {
                             self.selected_track = Some(id.clone());
                         }
+                        if response.double_clicked() { play = Some(index); }
                         response.context_menu(|ui| {
                             self.draw_track_menu(ui, id);
                         });
@@ -556,29 +672,41 @@ impl MusicApp {
             self.selected_album = None;
         }
         if let Some(album) = album_choice { self.selected_album = Some(album); }
-        if let Some(index) = play { self.start_queue(ids, index); }
+        if let Some(index) = play {
+            let source = self.selected_album.clone().map(QueueSource::Album).unwrap_or_default();
+            self.start_queue(ids, index, source);
+        }
     }
 
     fn draw_playlists(&mut self, ui: &mut egui::Ui) {
         ui.heading("Playlists");
         let mut create = false;
         let mut choose = None;
+        let mut play_playlist = None;
         ui.columns(2, |columns| {
             columns[0].horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.new_playlist_name).hint_text("New playlist name"));
                 create = ui.button("Create").clicked();
             });
             egui::ScrollArea::vertical().id_salt("playlists").show(&mut columns[0], |ui| {
-                for item in &self.playlists {
-                    if ui.selectable_label(self.selected_playlist.as_ref() == Some(&item.id), &item.name).clicked() {
-                        choose = Some(item.id.clone());
-                    }
+                let playlists = self.playlists.clone();
+                for item in playlists {
+                    ui.horizontal(|ui| {
+                        if ui.add(icon_button(PlayerIcon::Play, false))
+                            .on_hover_text(format!("Play {}", item.name)).clicked() {
+                            play_playlist = Some(item.id.clone());
+                        }
+                        if ui.selectable_label(self.selected_playlist.as_ref() == Some(&item.id), &item.name).clicked() {
+                            choose = Some(item.id.clone());
+                        }
+                    });
                 }
             });
             self.draw_playlist_detail(&mut columns[1]);
         });
         if create { self.create_playlist(); }
         if let Some(id) = choose { self.choose_playlist(id); }
+        if let Some(id) = play_playlist { self.play_playlist(&id); }
     }
 
     fn draw_playlist_detail(&mut self, ui: &mut egui::Ui) {
@@ -606,7 +734,8 @@ impl MusicApp {
             });
         }
         ui.horizontal(|ui| {
-            if !self.entries.is_empty() && ui.button("Play playlist").clicked() { play = Some(0); }
+            if ui.add_enabled(!self.entries.is_empty(), icon_button(PlayerIcon::Play, false))
+                .on_hover_text("Play playlist").clicked() { play = Some(0); }
             sort_title = ui.button("Sort by title").clicked();
             sort_artist = ui.button("Sort by artist").clicked();
         });
@@ -642,7 +771,6 @@ impl MusicApp {
                     _ => "",
                 };
                 ui.horizontal(|ui| {
-                    if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
                     if ui.add_enabled(index > 0, reorder_button(true)).on_hover_text("Move up").clicked() { move_entry = Some((index, index - 1)); }
                     if ui.add_enabled(index + 1 < entries.len(), reorder_button(false)).on_hover_text("Move down").clicked() { move_entry = Some((index, index + 1)); }
                     let title = format!("{} — {}", entry.title, display_name(&entry.artist, "Unknown artist"));
@@ -650,6 +778,7 @@ impl MusicApp {
                     if response.clicked() {
                         self.selected_track = Some(entry.track_id.clone());
                     }
+                    if response.double_clicked() { play = Some(index); }
                     response.context_menu(|ui| {
                         if ui.button("Remove from playlist").clicked() {
                             remove = Some(entry.id.clone());
@@ -701,7 +830,9 @@ impl MusicApp {
             self.save_order(&playlist_id, sorted.into_iter().map(|entry| entry.id).collect());
         }
         if let Some(index) = play {
-            self.start_queue(entries.into_iter().map(|entry| entry.track_id).collect(), index);
+            let source = self.playlist_source(&playlist_id);
+            self.start_queue(entries.into_iter().map(|entry| entry.track_id).collect(), index,
+                source);
         }
     }
 
@@ -712,41 +843,138 @@ impl MusicApp {
         }
     }
 
+    fn queue_source_name(&self) -> Option<String> {
+        match &self.queue.source {
+            QueueSource::Library => Some("Library".to_string()),
+            QueueSource::Playlist { id, name } => Some(self.playlists.iter()
+                .find(|playlist| &playlist.id == id).map(|playlist| playlist.name.clone())
+                .unwrap_or_else(|| name.clone())),
+            QueueSource::Album(name) => Some(display_name(name, "Unknown album")),
+            QueueSource::Single if self.queue.ids.len() > 1 => Some("Custom queue".to_string()),
+            QueueSource::Single => None,
+        }
+    }
+
+    fn draw_queue(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Queue");
+        if let Some(source) = self.queue_source_name() {
+            if self.queue.index.is_some() { ui.label(format!("Playing from {source}")); }
+        }
+        if let Some(index) = self.queue.index {
+            if let Some(track) = self.queue.ids.get(index).and_then(|id| self.track(id)) {
+                ui.strong(format!("Now playing: {} — {}", track.title,
+                    display_name(&track.artist, "Unknown artist")));
+            }
+        } else {
+            ui.label("Choose a playlist, album or song to start playback.");
+        }
+        ui.separator();
+        ui.add(egui::TextEdit::singleline(&mut self.queue_search)
+            .hint_text("Find a song to add to the queue"));
+        if !self.queue_search.trim().is_empty() {
+            let results: Vec<Track> = self.tracks.iter()
+                .filter(|track| matches_track(track, &self.queue_search)).take(50).cloned().collect();
+            egui::ScrollArea::vertical().id_salt("queue_search_results").max_height(150.0).show(ui, |ui| {
+                for track in results {
+                    ui.horizontal(|ui| {
+                        if ui.button("Play next").clicked() { self.add_to_queue(track.id.clone(), true); }
+                        if ui.button("Add to queue").clicked() { self.add_to_queue(track.id.clone(), false); }
+                        ui.label(format!("{} — {}", track.title, display_name(&track.artist, "Unknown artist")));
+                    });
+                }
+            });
+        }
+        ui.label("Up next · use the arrows to change playback order");
+        let start = self.queue.upcoming_start();
+        let upcoming: Vec<(usize, String)> = self.queue.ids.iter().enumerate().skip(start)
+            .map(|(index, id)| (index, id.clone())).collect();
+        let mut move_entry = None;
+        let mut remove_entry = None;
+        egui::ScrollArea::vertical().id_salt("queue_up_next").show(ui, |ui| {
+            for (index, id) in upcoming {
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(index > start, reorder_button(true)).on_hover_text("Earlier").clicked() {
+                        move_entry = Some((index, index - 1));
+                    }
+                    if ui.add_enabled(index + 1 < self.queue.ids.len(), reorder_button(false))
+                        .on_hover_text("Later").clicked() {
+                        move_entry = Some((index, index + 1));
+                    }
+                    if ui.button("Remove").clicked() { remove_entry = Some(index); }
+                    if let Some(track) = self.track(&id) {
+                        ui.label(format!("{} — {}", track.title, display_name(&track.artist, "Unknown artist")));
+                    } else {
+                        ui.label("Unavailable song");
+                    }
+                });
+            }
+        });
+        if let Some((from, to)) = move_entry { self.queue.ids.swap(from, to); }
+        if let Some(index) = remove_entry { self.queue.ids.remove(index); }
+    }
+
     fn draw_player(&mut self, ui: &mut egui::Ui) {
         let current = self.queue.index.and_then(|index| self.queue.ids.get(index))
             .and_then(|id| self.track(id)).cloned();
+        if current.is_some() {
+            if let Some(source) = self.queue_source_name() { ui.heading(source); }
+        }
         let mut previous = false;
         let mut next = false;
         let mut stop = false;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             if let Some(track) = &current {
                 ui.strong(&track.title);
                 ui.label(format!("— {}", display_name(&track.artist, "Unknown artist")));
             } else {
                 ui.label("Nothing playing");
             }
-            ui.separator();
-            previous = ui.add_enabled(current.is_some(), egui::Button::new("Previous")).clicked();
+        });
+        ui.horizontal_wrapped(|ui| {
+            previous = ui.add_enabled(current.is_some(), icon_button(PlayerIcon::Previous, false))
+                .on_hover_text("Previous").clicked();
             if let Some(engine) = &self.audio {
-                if ui.add_enabled(current.is_some(), egui::Button::new(if engine.is_paused() { "Resume" } else { "Pause" })).clicked() {
+                let icon = if engine.is_paused() { PlayerIcon::Play } else { PlayerIcon::Pause };
+                if ui.add_enabled(current.is_some(), icon_button(icon, false))
+                    .on_hover_text(if engine.is_paused() { "Resume" } else { "Pause" }).clicked() {
                     engine.pause_or_resume();
                 }
+            } else {
+                ui.add_enabled(false, icon_button(PlayerIcon::Play, false)).on_hover_text("Play");
             }
-            next = ui.add_enabled(current.is_some(), egui::Button::new("Next")).clicked();
-            stop = ui.add_enabled(current.is_some(), egui::Button::new("Stop")).clicked();
-            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).text("Volume")).changed() {
+            next = ui.add_enabled(current.is_some(), icon_button(PlayerIcon::Next, false))
+                .on_hover_text("Next").clicked();
+            stop = ui.add_enabled(current.is_some(), icon_button(PlayerIcon::Stop, false))
+                .on_hover_text("Stop").clicked();
+            if ui.add_enabled(current.is_some(), icon_button(PlayerIcon::Shuffle, self.queue.shuffle))
+                .on_hover_text("Shuffle upcoming songs").clicked() {
+                self.queue.shuffle = !self.queue.shuffle;
+                if self.queue.shuffle { self.queue.shuffle_upcoming(); }
+            }
+            let playlist_active = current.is_some() && matches!(&self.queue.source, QueueSource::Playlist { .. });
+            if ui.add_enabled(playlist_active, icon_button(PlayerIcon::Repeat, self.queue.repeat_playlist))
+                .on_hover_text("Repeat this playlist").clicked() {
+                self.queue.repeat_playlist = !self.queue.repeat_playlist;
+            }
+            if ui.add_sized([150.0, 28.0], egui::Slider::new(&mut self.volume, 0.0..=1.0).text("Volume")).changed() {
                 if let Some(engine) = &self.audio { engine.set_volume(self.volume); }
             }
         });
         if let (Some(track), Some(engine)) = (&current, &self.audio) {
             if track.duration_ms > 0 {
                 let length = track.duration_ms as f32 / 1000.0;
-                let mut position = engine.position().as_secs_f32().min(length);
+                let mut position = self.seek_preview.unwrap_or_else(|| engine.position().as_secs_f32()).min(length);
                 ui.horizontal(|ui| {
                     ui.label(duration_text((position * 1000.0) as i64));
-                    if ui.add(egui::Slider::new(&mut position, 0.0..=length).show_value(false)).changed() {
-                        if let Err(error) = engine.seek(Duration::from_secs_f32(position)) {
+                    let width = (ui.available_width() - 55.0).max(80.0);
+                    let response = ui.add_sized([width, 24.0],
+                        egui::Slider::new(&mut position, 0.0..=length).show_value(false));
+                    if response.changed() { self.seek_preview = Some(position); }
+                    if !response.is_pointer_button_down_on() {
+                        if let Some(position) = self.seek_preview.take() {
+                            if let Err(error) = engine.seek(Duration::from_secs_f32(position)) {
                             self.status = format!("Cannot seek: {error}");
+                            }
                         }
                     }
                     ui.label(duration_text(track.duration_ms));
@@ -757,7 +985,11 @@ impl MusicApp {
         if next { self.next(); }
         if stop {
             if let Some(engine) = &self.audio { engine.stop(); }
+            self.queue.ids.clear();
+            self.queue.source_ids.clear();
             self.queue.index = None;
+            self.queue.repeat_playlist = false;
+            self.seek_preview = None;
             self.status = "Stopped".to_string();
         }
     }
@@ -778,6 +1010,21 @@ impl MusicApp {
             ui.ctx().set_zoom_factor(self.ui_scale);
             if let Err(error) = self.library.set_ui_scale(self.ui_scale) {
                 self.status = format!("Cannot save interface size: {error}");
+            }
+        }
+        ui.separator();
+        ui.label("Player footer height");
+        let mut height = self.footer_height;
+        if ui.add(egui::Slider::new(&mut height, 150.0..=360.0).step_by(5.0).suffix(" pt")).changed() {
+            self.footer_height = height;
+            if let Err(error) = self.library.set_footer_height(height) {
+                self.status = format!("Cannot save player footer height: {error}");
+            }
+        }
+        if ui.button("Reset footer height").clicked() {
+            self.footer_height = 190.0;
+            if let Err(error) = self.library.set_footer_height(self.footer_height) {
+                self.status = format!("Cannot save player footer height: {error}");
             }
         }
     }
@@ -896,15 +1143,18 @@ impl eframe::App for MusicApp {
         if self.incoming.is_some() || self.queue.index.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
-        if self.queue.index.is_some() && self.audio.as_ref().is_some_and(|engine| engine.is_empty()) {
+        if self.seek_preview.is_none() && self.queue.index.is_some()
+            && self.audio.as_ref().is_some_and(|engine| engine.is_empty()) {
             self.next();
         }
-        egui::Panel::bottom("now_playing").show(ui, |ui| self.draw_player(ui));
+        egui::Panel::bottom("now_playing").exact_size(self.footer_height)
+            .show(ui, |ui| self.draw_player(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("Music Library");
                 ui.separator();
-                for (view, label) in [(View::Library, "Library"), (View::Artists, "Artists"), (View::Playlists, "Playlists")] {
+                for (view, label) in [(View::Library, "Library"), (View::Artists, "Artists"),
+                    (View::Playlists, "Playlists"), (View::Queue, "Queue")] {
                     if ui.selectable_label(self.view == view, label).clicked() { self.view = view; }
                 }
                 ui.separator();
@@ -914,7 +1164,9 @@ impl eframe::App for MusicApp {
                 if ui.add_enabled(self.incoming.is_none() && self.review.is_empty(), egui::Button::new("Import manifest")).clicked() {
                     self.begin_manifest_import();
                 }
-                if ui.add_enabled(self.selected_track.is_some() && !matches!(self.view, View::Settings | View::Curation), egui::Button::new("Play selected")).clicked() {
+                if ui.add_enabled(self.selected_track.is_some() &&
+                    matches!(self.view, View::Library | View::Artists | View::Playlists),
+                    egui::Button::new("Play selected")).clicked() {
                     self.play_selected();
                 }
                 ui.add_space(12.0);
@@ -927,6 +1179,7 @@ impl eframe::App for MusicApp {
                 View::Library => self.draw_library(ui),
                 View::Artists => self.draw_artists(ui),
                 View::Playlists => self.draw_playlists(ui),
+                View::Queue => self.draw_queue(ui),
                 View::Settings => self.draw_settings(ui),
                 View::Curation => self.draw_curation(ui),
             }
@@ -939,6 +1192,9 @@ impl eframe::App for MusicApp {
         self.remove_track_window(ui);
         if let Some((track_id, playlist_id)) = self.pending_playlist_add.take() {
             self.add_track_to_playlist(&playlist_id, &track_id);
+        }
+        if let Some((track_id, next)) = self.pending_queue_add.take() {
+            self.add_to_queue(track_id, next);
         }
     }
 }
@@ -970,7 +1226,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{artist_suggestions, matches_track, Track};
+    use super::{artist_suggestions, matches_track, Queue, QueueSource, Track};
     use std::path::PathBuf;
 
     #[test]
@@ -992,5 +1248,41 @@ mod tests {
             assert!(matches_track(&track, query));
         }
         assert!(!matches_track(&track, "second"));
+    }
+
+    #[test]
+    fn shuffling_keeps_the_current_song_and_history() {
+        let mut queue = Queue {
+            ids: ["first", "second", "third", "fourth", "fifth"].map(str::to_string).to_vec(),
+            index: Some(1),
+            ..Default::default()
+        };
+        queue.insert("added".to_string(), true);
+        assert_eq!(queue.ids[..3].iter().map(String::as_str).collect::<Vec<_>>(),
+            ["first", "second", "added"]);
+        queue.shuffle_upcoming();
+        assert_eq!(queue.ids[..2].iter().map(String::as_str).collect::<Vec<_>>(),
+            ["first", "second"]);
+        let mut remaining = queue.ids[2..].to_vec();
+        remaining.sort();
+        assert_eq!(remaining, ["added", "fifth", "fourth", "third"].map(str::to_string));
+    }
+
+    #[test]
+    fn repeating_a_playlist_restarts_its_songs_without_one_off_additions() {
+        let source = vec!["one".to_string(), "two".to_string()];
+        let mut queue = Queue {
+            ids: source.clone(),
+            index: Some(1),
+            source: QueueSource::Playlist { id: "playlist-id".to_string(), name: "List".to_string() },
+            source_ids: source.clone(),
+            repeat_playlist: true,
+            ..Default::default()
+        };
+        queue.insert("extra".to_string(), false);
+        assert_eq!(queue.ids, ["one", "two", "extra"].map(str::to_string));
+        assert!(queue.restart_playlist());
+        assert_eq!(queue.ids, source);
+        assert_eq!(queue.index, None);
     }
 }
