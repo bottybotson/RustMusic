@@ -145,8 +145,8 @@ impl Library {
         ).optional()?;
         Ok(value.and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite())
-            .unwrap_or(160.0)
-            .clamp(105.0, 320.0))
+            .unwrap_or(190.0)
+            .clamp(150.0, 360.0))
     }
 
     pub fn set_footer_height(&self, height: f32) -> rusqlite::Result<()> {
@@ -364,7 +364,7 @@ mod tests {
     fn footer_height_persists_between_launches() {
         let path = std::env::temp_dir().join(format!("music-library-footer-{}.sqlite3", Uuid::new_v4()));
         let library = Library::open(&path).unwrap();
-        assert_eq!(library.footer_height().unwrap(), 160.0);
+        assert_eq!(library.footer_height().unwrap(), 190.0);
         library.set_footer_height(210.0).unwrap();
         drop(library);
         let reopened = Library::open(&path).unwrap();
