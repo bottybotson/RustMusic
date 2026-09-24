@@ -44,13 +44,14 @@ These instructions target the current main Linux Mint release (Cinnamon, MATE or
    ./target/release/music-library
    ```
 
-In the window, choose **Import files**, select audio files, edit any missing metadata, then choose **Import**. The **Library**, **Artists**, and **Playlists** tabs provide different views of the same tracks.
+In the window, choose **Import files**, select audio files, edit any missing metadata, then choose **Import**. Typing an artist name offers matching artists already in your library. The **Library**, **Artists**, **Playlists**, and **Settings** tabs provide the main views and controls.
 
 - In **Library**, search or select a track. Use **Play selected** or its ▶ button to play through the visible list in order.
-- To remove a track from the library, select it in any tab, click **Remove selected…**, and confirm. Its entries in playlists and the playback queue are removed too. The audio file is left on disk; importing the file again adds it back.
+- To remove a track from the library, right-click its title in Library, Artists, or Playlists and choose **Remove from library…**. Confirm the action. Its entries in playlists and the playback queue are removed too. The audio file is left on disk; importing the file again adds it back.
 - In **Artists**, choose an artist and album to see their tracks. Use **Play album** or a track's ▶ button to play that album in title order.
-- In **Playlists**, create a playlist, then select a track in Library or Artists and use **Add to playlist**. A playlist can be renamed, deleted, sorted by title or artist, and manually reordered with ↑ and ↓. A track can appear more than once. Use **Play playlist** to play its entries in order.
+- In **Playlists**, create a playlist, then select a track in Library or Artists and use **Add to playlist**. A playlist can be renamed, deleted, sorted by title or artist, and manually reordered with ↑ and ↓. Right-click an entry to remove it from that playlist. A track can appear more than once. Use **Play playlist** to play its entries in order.
 - The bottom bar shows the current track and provides previous, pause/resume, next, stop, position seeking, and volume. Missing files and unresolved playlist entries stay visible; playback skips them.
+- In **Settings**, adjust the interface size (0.9× to 2×) or reset it to the larger default. The choice persists across launches.
 
 ## If something fails
 
