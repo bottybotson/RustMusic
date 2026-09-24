@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 dirs = "7.0.0"
 eframe = "0.36.2"
+egui_extras = { version = "0.36.2", default-features = false, features = ["svg"] }
 lofty = "0.25.4"
 rfd = "0.17.2"
 rodio = "0.22.2"

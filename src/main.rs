@@ -70,6 +70,31 @@ fn duration_text(milliseconds: i64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
+fn play_button() -> egui::Button<'static> {
+    egui::Button::new(
+        egui::Image::new(egui::include_image!("../assets/play.svg"))
+            .fit_to_exact_size(egui::vec2(18.0, 18.0))
+            .alt_text("Play"),
+    )
+    .image_tint_follows_text_color(true)
+    .min_size(egui::vec2(34.0, 32.0))
+}
+
+fn reorder_button(up: bool) -> egui::Button<'static> {
+    let source = if up {
+        egui::include_image!("../assets/up.svg")
+    } else {
+        egui::include_image!("../assets/down.svg")
+    };
+    egui::Button::new(
+        egui::Image::new(source)
+            .fit_to_exact_size(egui::vec2(18.0, 18.0))
+            .alt_text(if up { "Move up" } else { "Move down" }),
+    )
+    .image_tint_follows_text_color(true)
+    .min_size(egui::vec2(34.0, 32.0))
+}
+
 fn artist_suggestions<'a>(artists: &'a [String], input: &str) -> Vec<&'a str> {
     let prefix = input.trim().to_lowercase();
     if prefix.is_empty() { return Vec::new(); }
@@ -434,7 +459,7 @@ impl MusicApp {
                 ui.end_row();
                 for (index, id) in ids.iter().enumerate() {
                     let Some(track) = self.track(id).cloned() else { continue };
-                    if ui.button("▶").clicked() { play = Some(index); }
+                    if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
                     let response = ui.selectable_label(self.selected_track.as_ref() == Some(id), &track.title);
                     if response.clicked() {
                         self.selected_track = Some(id.clone());
@@ -487,7 +512,7 @@ impl MusicApp {
                 for (index, id) in ids.iter().enumerate() {
                     let Some(track) = self.track(id).cloned() else { continue };
                     ui.horizontal(|ui| {
-                        if ui.button("▶").clicked() { play = Some(index); }
+                        if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
                         let response = ui.selectable_label(self.selected_track.as_ref() == Some(id), &track.title);
                         if response.clicked() {
                             self.selected_track = Some(id.clone());
@@ -580,7 +605,7 @@ impl MusicApp {
             });
             if results.len() > 50 { ui.small("Showing the first 50 results. Refine your search."); }
         }
-        ui.label(format!("{} entries · use ↑ and ↓ to reorder", self.entries.len()));
+        ui.label(format!("{} entries · use the arrow buttons to reorder", self.entries.len()));
         let entries = self.entries.clone();
         egui::ScrollArea::vertical().id_salt("playlist_entries").show(ui, |ui| {
             for (index, entry) in entries.iter().enumerate() {
@@ -592,9 +617,9 @@ impl MusicApp {
                     _ => "",
                 };
                 ui.horizontal(|ui| {
-                    if ui.button("▶").clicked() { play = Some(index); }
-                    if ui.add_enabled(index > 0, egui::Button::new("↑")).clicked() { move_entry = Some((index, index - 1)); }
-                    if ui.add_enabled(index + 1 < entries.len(), egui::Button::new("↓")).clicked() { move_entry = Some((index, index + 1)); }
+                    if ui.add(play_button()).on_hover_text("Play").clicked() { play = Some(index); }
+                    if ui.add_enabled(index > 0, reorder_button(true)).on_hover_text("Move up").clicked() { move_entry = Some((index, index - 1)); }
+                    if ui.add_enabled(index + 1 < entries.len(), reorder_button(false)).on_hover_text("Move down").clicked() { move_entry = Some((index, index + 1)); }
                     let title = format!("{} — {}", entry.title, display_name(&entry.artist, "Unknown artist"));
                     let response = ui.selectable_label(self.selected_track.as_ref() == Some(&entry.track_id), title);
                     if response.clicked() {
@@ -716,7 +741,7 @@ impl MusicApp {
         ui.heading("Settings");
         ui.label("Interface size");
         let mut scale = self.ui_scale;
-        if ui.add(egui::Slider::new(&mut scale, 0.9..=2.0).step_by(0.05).suffix("×")).changed() {
+        if ui.add(egui::Slider::new(&mut scale, 0.9..=2.0).step_by(0.05).suffix("x")).changed() {
             self.ui_scale = scale;
             ui.ctx().set_zoom_factor(scale);
             if let Err(error) = self.library.set_ui_scale(scale) {
@@ -908,7 +933,10 @@ fn main() -> eframe::Result {
                 .with_min_inner_size([850.0, 520.0]),
             ..Default::default()
         },
-        Box::new(move |creation_context| Ok(Box::new(MusicApp::new(library, &creation_context.egui_ctx)))),
+        Box::new(move |creation_context| {
+            egui_extras::install_image_loaders(&creation_context.egui_ctx);
+            Ok(Box::new(MusicApp::new(library, &creation_context.egui_ctx)))
+        }),
     )
 }
 
