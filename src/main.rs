@@ -180,6 +180,31 @@ impl MusicApp {
         });
     }
 
+    fn begin_manifest_import(&mut self) {
+        if self.incoming.is_some() || !self.review.is_empty() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON manifest", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.incoming = Some(receiver);
+        self.status = "Scanning manifest…".to_string();
+        std::thread::spawn(move || {
+            let result = match importer::scan_manifest(&path) {
+                Ok((candidates, errors)) => ScanResult { candidates, errors },
+                Err(error) => ScanResult {
+                    candidates: Vec::new(),
+                    errors: vec![format!("{}: {error}", path.display())],
+                },
+            };
+            let _ = sender.send(result);
+        });
+    }
+
     fn receive_scan(&mut self) {
         let Some(receiver) = &self.incoming else { return };
         let Ok(result) = receiver.try_recv() else { return };
@@ -885,6 +910,9 @@ impl eframe::App for MusicApp {
                 ui.separator();
                 if ui.add_enabled(self.incoming.is_none() && self.review.is_empty(), egui::Button::new("Import files")).clicked() {
                     self.begin_import();
+                }
+                if ui.add_enabled(self.incoming.is_none() && self.review.is_empty(), egui::Button::new("Import manifest")).clicked() {
+                    self.begin_manifest_import();
                 }
                 if ui.add_enabled(self.selected_track.is_some() && !matches!(self.view, View::Settings | View::Curation), egui::Button::new("Play selected")).clicked() {
                     self.play_selected();

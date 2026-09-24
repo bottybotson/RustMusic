@@ -46,6 +46,28 @@ These instructions target the current main Linux Mint release (Cinnamon, MATE or
 
 In the window, choose **Import files**, select audio files, edit any missing metadata, then choose **Import**. Typing an artist name offers matching artists already in your library. The **Library**, **Artists**, **Playlists**, **Settings**, and **Curation** tabs provide the views and controls.
 
+## Import MP3s with a JSON manifest
+
+Put a `music-library-import.json` file beside your MP3s (subdirectories are supported). Choose **Import manifest**, select the JSON file, review the titles, artists and albums, then choose **Import**. Paths are relative to the manifest and must stay inside its directory. The app reads metadata from MP3 tags when a field is omitted. It keeps the audio files in place, so keep the folder after importing.
+
+```json
+{
+  "version": 1,
+  "tracks": [
+    { "file": "my-video.mp3", "title": "My Song", "artist": "My Artist", "album": "My Videos" }
+  ]
+}
+```
+
+For your own private YouTube videos, one batch workflow is to use [yt-dlp](https://github.com/yt-dlp/yt-dlp) and ffmpeg externally to save audio and video metadata together. From the desired output directory, run (replace `firefox` with your signed-in browser and the URL with your video or playlist URL):
+
+```sh
+yt-dlp --cookies-from-browser firefox -x --audio-format mp3 --write-info-json -o '%(id)s.%(ext)s' 'VIDEO_OR_PLAYLIST_URL'
+python3 /path/to/RustMusic/tools/manifest_from_ytdlp.py .
+```
+
+The script pairs each `<video-id>.info.json` with `<video-id>.mp3`, writes `music-library-import.json`, and skips sidecars without an MP3. Edit the manifest to correct titles, artists or albums before importing. Keep sidecars and browser credentials private; the app itself neither contacts YouTube nor reads the sidecars. On Windows Command Prompt, use `"%(id)s.%(ext)s"` for the output template and `python` for the script.
+
 - In **Library**, search or select a track. Use **Play selected** or its play icon button to play through the visible list in order. Right-click a track title for **Add to playlist**, then choose a playlist from the submenu. The most recently changed playlists appear first.
 - To remove a track from the library, open **Curation**, find the track, choose **Remove…**, and confirm. Its entries in playlists and the playback queue are removed too. The audio file is left on disk; importing the file again adds it back.
 - In **Artists**, choose an artist and album to see their tracks. Use **Play album** or a track's play icon button to play that album in title order.
