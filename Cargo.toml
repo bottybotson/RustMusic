@@ -12,5 +12,7 @@ rfd = "0.17.2"
 rodio = "0.22.2"
 rand = "0.9"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }

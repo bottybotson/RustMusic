@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::Accessor;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 pub struct Candidate {
@@ -17,6 +18,68 @@ pub struct Candidate {
     pub format: &'static str,
     pub missing_title: bool,
     pub missing_artist: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Manifest {
+    version: u32,
+    tracks: Vec<ManifestTrack>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestTrack {
+    file: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+}
+
+pub fn scan_manifest(path: &Path) -> Result<(Vec<Candidate>, Vec<String>), String> {
+    let contents = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let manifest: Manifest = serde_json::from_str(&contents).map_err(|error| error.to_string())?;
+    if manifest.version != 1 {
+        return Err(format!("Unsupported manifest version: {}", manifest.version));
+    }
+    let base = path.parent().ok_or("Manifest has no parent directory")?
+        .canonicalize().map_err(|error| error.to_string())?;
+    let mut candidates = Vec::new();
+    let mut errors = Vec::new();
+    for (index, entry) in manifest.tracks.into_iter().enumerate() {
+        let result = (|| -> Result<Candidate, String> {
+            let relative = Path::new(&entry.file);
+            if relative.as_os_str().is_empty() || relative.is_absolute() {
+                return Err("File must be a relative path".to_string());
+            }
+            let source = base.join(relative).canonicalize().map_err(|error| error.to_string())?;
+            if !source.starts_with(&base) || !source.is_file() {
+                return Err("File must exist inside the manifest directory".to_string());
+            }
+            if source.extension().and_then(|extension| extension.to_str())
+                .is_none_or(|extension| !extension.eq_ignore_ascii_case("mp3")) {
+                return Err("Manifest entries must reference MP3 files".to_string());
+            }
+            let mut candidate = scan(&source)?;
+            if let Some(title) = entry.title {
+                candidate.title = title;
+                candidate.missing_title = candidate.title.trim().is_empty();
+            }
+            if let Some(artist) = entry.artist {
+                candidate.artist = artist;
+                candidate.missing_artist = candidate.artist.trim().is_empty();
+            }
+            if let Some(album) = entry.album {
+                candidate.album = album;
+            }
+            Ok(candidate)
+        })();
+        match result {
+            Ok(candidate) => candidates.push(candidate),
+            Err(error) => errors.push(format!("Track {} ({}): {error}", index + 1, entry.file)),
+        }
+    }
+    Ok((candidates, errors))
 }
 
 fn supported_format(path: &Path) -> Option<&'static str> {
