@@ -58,7 +58,7 @@ In the window, choose **Import files**, select audio files, edit any missing met
 - `cargo: command not found`: Run `. "$HOME/.cargo/env"` in the current terminal, or open a new terminal.
 - `alsa-sys` or `alsa.pc` errors during compilation: Check that `libasound2-dev` and `pkg-config` were installed in step 1.
 - The import file picker does not open: Install a compatible desktop portal backend with `sudo apt install xdg-desktop-portal-gtk` and log out and back in. The app uses the XDG Desktop Portal file picker on Linux.
-- A build error in this project's Rust source: Save the full `cargo check` output. The source could not be compiled in the environment where it was created, so the build is not yet verified.
+- A build error in this project's Rust source: Save the full `cargo check` output. The repository's Linux workflow also runs `cargo test` on each push.
 
 The database is normally at `~/.local/share/MusicLibrary/library.sqlite3` on Mint, or under `$XDG_DATA_HOME/MusicLibrary` if you have set that variable. Audio files stay in their original locations. If one moves, it is shown as missing until you import an identical copy.
 
