@@ -50,8 +50,8 @@ In the window, choose **Import files**, select audio files, edit any missing met
 - To remove a track from the library, open **Curation**, find the track, choose **Remove…**, and confirm. Its entries in playlists and the playback queue are removed too. The audio file is left on disk; importing the file again adds it back.
 - In **Artists**, choose an artist and album to see their tracks. Use **Play album** or a track's play icon button to play that album in title order.
 - In **Playlists**, create or select a playlist, search for songs by title, artist or album, and click **Add** beside a result. You can also right-click tracks in Library, Artists or a playlist to add them to another playlist. A playlist can be renamed, deleted, sorted by title or artist, and manually reordered with the up and down arrow buttons. Right-click an entry to remove it from that playlist. A track can appear more than once. Use **Play playlist** to play its entries in order.
-- The bottom bar shows the current track and provides previous, pause/resume, next, stop, position seeking, and volume. Missing files and unresolved playlist entries stay visible; playback skips them.
-- In **Settings**, adjust the interface size (0.9x to 2x) or reset it to the larger default. The choice persists across launches.
+- The bottom bar prominently shows the source of playback (Library, playlist or album) above the current track; a single track played on its own has no source heading. It provides previous, pause/resume, next, stop, position seeking, and volume. Dragging the position slider previews the time and seeks when released. Missing files and unresolved playlist entries stay visible; playback skips them.
+- In **Settings**, adjust the interface size (0.9x to 2x) and the player footer height, or reset either to its default. Both choices persist across launches.
 
 ## If something fails
 

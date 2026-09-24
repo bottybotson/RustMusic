@@ -137,6 +137,26 @@ impl Library {
         Ok(())
     }
 
+    pub fn footer_height(&self) -> rusqlite::Result<f32> {
+        let value: Option<String> = self.connection.query_row(
+            "SELECT value FROM settings WHERE key = 'footer_height'",
+            [],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(value.and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(160.0)
+            .clamp(105.0, 320.0))
+    }
+
+    pub fn set_footer_height(&self, height: f32) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('footer_height', ?1)",
+            [height.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn add(&self, candidate: &Candidate) -> rusqlite::Result<AddResult> {
         let source = candidate.source.to_string_lossy().to_string();
         let inserted = self.connection.execute(
@@ -336,6 +356,19 @@ mod tests {
         drop(library);
         let reopened = Library::open(&path).unwrap();
         assert_eq!(reopened.ui_scale().unwrap(), 1.5);
+        drop(reopened);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn footer_height_persists_between_launches() {
+        let path = std::env::temp_dir().join(format!("music-library-footer-{}.sqlite3", Uuid::new_v4()));
+        let library = Library::open(&path).unwrap();
+        assert_eq!(library.footer_height().unwrap(), 160.0);
+        library.set_footer_height(210.0).unwrap();
+        drop(library);
+        let reopened = Library::open(&path).unwrap();
+        assert_eq!(reopened.footer_height().unwrap(), 210.0);
         drop(reopened);
         fs::remove_file(path).unwrap();
     }
