@@ -175,6 +175,7 @@ mod tests {
         let playlists = harness.state().library.playlists().unwrap();
         assert_eq!(playlists.len(), 1);
         assert_eq!(playlists[0].name, "Morning Mix");
+        harness.step();
         harness.get_by_label("Morning Mix");
 
         drop(harness);
