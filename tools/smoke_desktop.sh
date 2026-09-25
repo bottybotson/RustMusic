@@ -6,6 +6,7 @@ trap 'rm -rf "$test_dir"' EXIT
 export XDG_DATA_HOME="$test_dir"
 export LIBGL_ALWAYS_SOFTWARE=1
 export WINIT_UNIX_BACKEND=x11
+export WGPU_BACKEND=gl
 
 xvfb-run -a -s '-screen 0 1280x800x24' bash -euo pipefail -c '
   ./target/debug/music-library > "$XDG_DATA_HOME/app.log" 2>&1 &
