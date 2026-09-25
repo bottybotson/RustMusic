@@ -2,6 +2,16 @@
 
 Rust desktop player for Windows and Linux. It imports MP3, FLAC, WAV and Ogg/Vorbis files, lets you edit missing metadata, browse tracks by artist and album, manage playlists, and play a queue with a persistent now-playing bar.
 
+## Code layout
+
+- `src/main.rs` opens the database and starts the desktop app.
+- `src/app.rs` owns app state and coordinates imports, playlists, and playback.
+- `src/app/queue.rs` keeps queue ordering, source, shuffle, and repeat rules together.
+- `src/app/ui.rs` dispatches views; `src/app/ui/` contains library and playlist views, playback controls, and dialogs.
+- `src/library.rs`, `src/importer.rs`, and `src/audio.rs` handle SQLite storage, audio-file scanning, and output respectively.
+
+The UI calls app actions, which use the library and audio modules. No UI framework types are needed in the queue, library, importer, or audio modules.
+
 ## Build on Linux Mint 22.3
 
 These instructions target the current main Linux Mint release (Cinnamon, MATE or Xfce), not LMDE. You need an internet connection for the first build because Cargo downloads Rust packages.
