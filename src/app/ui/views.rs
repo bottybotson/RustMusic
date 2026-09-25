@@ -234,32 +234,11 @@ impl MusicApp {
                 });
             }
         });
-        if rename {
-            let name = self.rename_value.trim();
-            if name.is_empty() {
-                self.status = "Playlist name cannot be blank".to_string();
-            } else {
-                match self.library.rename_playlist(&playlist_id, name) {
-                    Ok(()) => self.refresh_playlists(),
-                    Err(error) => self.status = format!("Cannot rename playlist: {error}"),
-                }
-            }
-        }
+        if rename { self.rename_playlist(&playlist_id); }
         if delete {
-            match self.library.delete_playlist(&playlist_id) {
-                Ok(()) => {
-                    self.selected_playlist = None;
-                    self.entries.clear();
-                    self.confirm_delete = false;
-                    self.refresh_playlists();
-                }
-                Err(error) => self.status = format!("Cannot delete playlist: {error}"),
-            }
+            self.delete_playlist(&playlist_id);
         } else if let Some(id) = remove {
-            match self.library.remove_entry(&playlist_id, &id) {
-                Ok(()) => { self.reload_entries(); self.refresh_playlists(); }
-                Err(error) => self.status = format!("Cannot remove entry: {error}"),
-            }
+            self.remove_playlist_entry(&playlist_id, &id);
         } else if let Some((from, to)) = move_entry {
             let mut ids: Vec<String> = entries.iter().map(|entry| entry.id.clone()).collect();
             ids.swap(from, to);
@@ -285,33 +264,19 @@ impl MusicApp {
         ui.label("Interface size");
         let mut scale = self.ui_scale;
         if ui.add(egui::Slider::new(&mut scale, 0.9..=2.0).step_by(0.05).suffix("x")).changed() {
-            self.ui_scale = scale;
-            ui.ctx().set_zoom_factor(scale);
-            if let Err(error) = self.library.set_ui_scale(scale) {
-                self.status = format!("Cannot save interface size: {error}");
-            }
+            self.set_ui_scale(ui.ctx(), scale);
         }
         if ui.button("Reset to default").clicked() {
-            self.ui_scale = 1.2;
-            ui.ctx().set_zoom_factor(self.ui_scale);
-            if let Err(error) = self.library.set_ui_scale(self.ui_scale) {
-                self.status = format!("Cannot save interface size: {error}");
-            }
+            self.set_ui_scale(ui.ctx(), 1.2);
         }
         ui.separator();
         ui.label("Player footer height");
         let mut height = self.footer_height;
         if ui.add(egui::Slider::new(&mut height, 150.0..=360.0).step_by(5.0).suffix(" pt")).changed() {
-            self.footer_height = height;
-            if let Err(error) = self.library.set_footer_height(height) {
-                self.status = format!("Cannot save player footer height: {error}");
-            }
+            self.set_footer_height(height);
         }
         if ui.button("Reset footer height").clicked() {
-            self.footer_height = 190.0;
-            if let Err(error) = self.library.set_footer_height(self.footer_height) {
-                self.status = format!("Cannot save player footer height: {error}");
-            }
+            self.set_footer_height(190.0);
         }
     }
 
@@ -335,6 +300,4 @@ impl MusicApp {
             }
         });
     }
-
-
 }

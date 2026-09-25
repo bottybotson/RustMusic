@@ -114,7 +114,7 @@ impl MusicApp {
             let playlist_active = current.is_some() && matches!(&self.queue.source, QueueSource::Playlist { .. });
             if ui.add_enabled(playlist_active, icon_button(PlayerIcon::Repeat, self.queue.repeat_playlist))
                 .on_hover_text("Repeat this playlist").clicked() {
-                self.queue.repeat_playlist = !self.queue.repeat_playlist;
+                self.queue.toggle_repeat_playlist();
             }
             if ui.add_sized([150.0, 28.0], egui::Slider::new(&mut self.volume, 0.0..=1.0).text("Volume")).changed() {
                 if let Some(engine) = &self.audio { engine.set_volume(self.volume); }
@@ -143,13 +143,6 @@ impl MusicApp {
         }
         if previous { self.previous(); }
         if next { self.next(); }
-        if stop {
-            if let Some(engine) = &self.audio { engine.stop(); }
-            self.queue.clear();
-            self.seek_preview = None;
-            self.status = "Stopped".to_string();
-        }
+        if stop { self.stop(); }
     }
-
-
 }

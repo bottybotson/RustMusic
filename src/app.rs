@@ -261,6 +261,52 @@ impl MusicApp {
         }
     }
 
+    fn rename_playlist(&mut self, playlist_id: &str) {
+        let name = self.rename_value.trim();
+        if name.is_empty() {
+            self.status = "Playlist name cannot be blank".to_string();
+            return;
+        }
+        match self.library.rename_playlist(playlist_id, name) {
+            Ok(()) => self.refresh_playlists(),
+            Err(error) => self.status = format!("Cannot rename playlist: {error}"),
+        }
+    }
+
+    fn delete_playlist(&mut self, playlist_id: &str) {
+        match self.library.delete_playlist(playlist_id) {
+            Ok(()) => {
+                self.selected_playlist = None;
+                self.entries.clear();
+                self.confirm_delete = false;
+                self.refresh_playlists();
+            }
+            Err(error) => self.status = format!("Cannot delete playlist: {error}"),
+        }
+    }
+
+    fn remove_playlist_entry(&mut self, playlist_id: &str, entry_id: &str) {
+        match self.library.remove_entry(playlist_id, entry_id) {
+            Ok(()) => { self.reload_entries(); self.refresh_playlists(); }
+            Err(error) => self.status = format!("Cannot remove entry: {error}"),
+        }
+    }
+
+    fn set_ui_scale(&mut self, ctx: &egui::Context, scale: f32) {
+        self.ui_scale = scale;
+        ctx.set_zoom_factor(scale);
+        if let Err(error) = self.library.set_ui_scale(scale) {
+            self.status = format!("Cannot save interface size: {error}");
+        }
+    }
+
+    fn set_footer_height(&mut self, height: f32) {
+        self.footer_height = height;
+        if let Err(error) = self.library.set_footer_height(height) {
+            self.status = format!("Cannot save player footer height: {error}");
+        }
+    }
+
     fn track(&self, id: &str) -> Option<&Track> {
         self.tracks.iter().find(|track| track.id == id)
     }
@@ -349,6 +395,13 @@ impl MusicApp {
                 self.queue.clear();
             }
         }
+    }
+
+    fn stop(&mut self) {
+        if let Some(engine) = &self.audio { engine.stop(); }
+        self.queue.clear();
+        self.seek_preview = None;
+        self.status = "Stopped".to_string();
     }
 
     fn play_playlist(&mut self, id: &str) {

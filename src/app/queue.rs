@@ -69,6 +69,12 @@ impl Queue {
         }
     }
 
+    pub(super) fn toggle_repeat_playlist(&mut self) {
+        if matches!(&self.source, QueueSource::Playlist { .. }) {
+            self.repeat_playlist = !self.repeat_playlist;
+        }
+    }
+
     pub(super) fn move_upcoming(&mut self, from: usize, to: usize) {
         if from >= self.upcoming_start() && to >= self.upcoming_start()
             && from < self.ids.len() && to < self.ids.len() {
@@ -158,6 +164,8 @@ mod tests {
     fn starting_an_album_disables_playlist_repeat() {
         let mut queue = Queue { repeat_playlist: true, ..Default::default() };
         queue.start(vec!["one".to_string()], 0, QueueSource::Album("Album".to_string()));
+        assert!(!queue.repeat_playlist);
+        queue.toggle_repeat_playlist();
         assert!(!queue.repeat_playlist);
         assert_eq!(queue.source_ids, queue.ids);
         queue.clear();
