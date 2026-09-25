@@ -12,6 +12,8 @@ Rust desktop player for Windows and Linux. It imports MP3, FLAC, WAV and Ogg/Vor
 
 The UI calls app actions, which use the library and audio modules. No UI framework types are needed in the queue, library, importer, or audio modules.
 
+The Linux workflow runs `cargo test` and a desktop startup smoke test under Xvfb. The smoke test checks that the real app opens a visible window, creates its database, and stays running briefly. It does not exercise playback, file dialogs, or individual controls.
+
 ## Build on Linux Mint 22.3
 
 These instructions target the current main Linux Mint release (Cinnamon, MATE or Xfce), not LMDE. You need an internet connection for the first build because Cargo downloads Rust packages.
