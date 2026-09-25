@@ -2,6 +2,7 @@ name: Rust checks
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -14,5 +15,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
-      - name: Check and test
+      - name: Test pull request
+        if: github.event_name == 'pull_request'
+        run: cargo test -- --skip app::ui::tests::creates_playlist_through_the_ui
+      - name: Test main including UI
+        if: github.event_name == 'push'
         run: cargo test

@@ -137,7 +137,9 @@ impl eframe::App for MusicApp {
 
 #[cfg(test)]
 mod tests {
-    use super::artist_suggestions;
+    use super::{artist_suggestions, MusicApp, View};
+    use crate::library::Library;
+    use egui_kittest::{kittest::Queryable, Harness};
 
     #[test]
     fn suggests_existing_artists_by_prefix() {
@@ -145,5 +147,38 @@ mod tests {
         assert_eq!(artist_suggestions(&artists, " ad"), vec!["Adele"]);
         assert!(artist_suggestions(&artists, "adele").is_empty());
         assert!(artist_suggestions(&artists, "").is_empty());
+    }
+
+    #[test]
+    fn creates_playlist_through_the_ui() {
+        let path = std::env::temp_dir().join(format!(
+            "music-library-ui-{}.sqlite3",
+            uuid::Uuid::new_v4()
+        ));
+        let mut harness = Harness::<MusicApp>::builder()
+            .with_size(eframe::egui::vec2(1100.0, 720.0))
+            .build_eframe(|cc| MusicApp::new(Library::open(&path).unwrap(), &cc.egui_ctx));
+
+        harness.get_by_label("Playlists").click();
+        harness.step();
+        assert!(harness.state().view == View::Playlists);
+
+        harness.get_by_label("Create").click();
+        harness.step();
+        assert_eq!(harness.state().status, "Enter a playlist name");
+
+        harness.state_mut().new_playlist_name = "Morning Mix".to_owned();
+        harness.step();
+        harness.get_by_label("Create").click();
+        harness.step();
+
+        let playlists = harness.state().library.playlists().unwrap();
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0].name, "Morning Mix");
+        harness.step();
+        harness.get_by_label("Morning Mix");
+
+        drop(harness);
+        std::fs::remove_file(path).unwrap();
     }
 }
