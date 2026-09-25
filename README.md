@@ -12,7 +12,7 @@ Rust desktop player for Windows and Linux. It imports MP3, FLAC, WAV and Ogg/Vor
 
 The UI calls app actions, which use the library and audio modules. No UI framework types are needed in the queue, library, importer, or audio modules.
 
-Run `cargo test` to check the app, including the headless playlist UI test built with `egui_kittest`. The GitHub Actions workflow runs the same command for pushes and pull requests.
+Run `cargo test` to check the app, including the headless playlist UI test built with `egui_kittest`. GitHub Actions skips the UI test on pull requests and runs the full suite after a merge updates `main`.
 
 ## Build on Linux Mint 22.3
 
